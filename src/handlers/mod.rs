@@ -6,10 +6,14 @@ use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
 use crate::domain;
 
+const ADD_AUTHOR_COMMAND: &str = "!addauthor";
 const LIST_AUTHORS_COMMAND: &str = "!listauthors";
 const AMI_HEALTH_COMMAND: &str = "!amihealth";
 const TEST_COMMAND: &str = "!test";
-// const HELP_COMMAND: &str = "!help";
+
+const SELF: &str = "Woodcord";
+
+const TEST_CHANNEL: &str = "<#725470018514583634>";
 
 pub struct WoodcordHandler;
 
@@ -21,7 +25,48 @@ impl EventHandler for WoodcordHandler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
+        if SELF == &msg.author.name {
+            println!("Ignoring self (Woodcord)");
+            return
+        }
         match &msg.content[..] {
+            ADD_AUTHOR_COMMAND => {
+                let author_request = domain::ami::AuthorRequest {
+                    Alias: msg.author.name,
+                    Platform: "Discord".to_string(),
+                    PlatformAliasId: *msg.author.id.as_u64()
+                };
+
+                let client = reqwest::Client::builder().build().unwrap();
+                let resp = client.post("http://localhost:8080/ami/author")
+                            .json(&author_request)
+                            .send();
+
+                match resp.await {
+                    Ok(resp) => {
+                        if resp.status() == StatusCode::CREATED {
+                            let author = resp.json::<domain::ami::Author>().await.unwrap();
+                            println!("Added Author : {:?}", author);
+                            if let Err(why) = msg.channel_id.say(&ctx.http, format!("Added Author: {:?}", author)).await {
+                                println!("Error sending message: {:?}", why);
+                            }
+                        } else if resp.status() == StatusCode::FOUND {
+                            if let Err(why) = msg.channel_id.say(&ctx.http, format!("Author already exists: {:?}", author_request.Alias)).await {
+                                println!("Error sending message: {:?}", why);
+                            }
+                        } else {
+                            if let Err(why) = msg.channel_id.say(&ctx.http, "Error retrieving or parsing response.").await {
+                                println!("Error sending message: {:?}", why);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        if let Err(why) = msg.channel_id.say(&ctx.http, "Error :: service might be off").await {
+                            println!("Error sending message: {:?}", why);
+                        }
+                    }
+                }
+            },
             LIST_AUTHORS_COMMAND => {
                 let client = reqwest::Client::builder().build().unwrap();
                 let resp = client.get("http://localhost:8080/ami/author").send();
@@ -94,7 +139,33 @@ impl EventHandler for WoodcordHandler {
                     println!("Error sending message: {:?}", why);
                 }
             },
-            _ => println!("Message ain't special")
+            _ => {
+                let channel = match msg.channel_id.to_channel(&ctx).await {
+                    Ok(channel) => channel,
+                    Err(why) => {
+                        println!("Error getting channel: {:?}", why);
+    
+                        return;
+                    },
+                };
+
+                println!("Evaluating channel: {:?}", channel.to_string());
+                println!("Author: {:?}", &msg.author.name);
+
+                if TEST_CHANNEL == channel.to_string() {
+                    let response = MessageBuilder::new()
+                    .push("Repeat: ")
+                    .push(&msg.content)
+                    .build();
+                if let Err(why) = msg.channel_id.say(&ctx.http, &response).await {
+                    println!("Error sending message: {:?}", why);
+                }
+
+                } else {
+                    println!("'Ignoring' message from {:?}", &msg.author.name)
+                }
+                
+            }
         }
     }
 }
