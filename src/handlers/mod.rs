@@ -7,6 +7,7 @@ use serenity::utils::MessageBuilder;
 use crate::domain;
 
 const ADD_AUTHOR_COMMAND: &str = "!addauthor";
+const DELETE_AUTHOR_COMMAND: &str = "!delauthor";
 const LIST_AUTHORS_COMMAND: &str = "!listauthors";
 const AMI_HEALTH_COMMAND: &str = "!amihealth";
 const TEST_COMMAND: &str = "!test";
@@ -62,6 +63,50 @@ impl EventHandler for WoodcordHandler {
                     }
                     Err(_) => {
                         if let Err(why) = msg.channel_id.say(&ctx.http, "Error :: service might be off").await {
+                            println!("Error sending message: {:?}", why);
+                        }
+                    }
+                }
+            },
+            DELETE_AUTHOR_COMMAND => {
+                let client = reqwest::Client::builder().build().unwrap();
+                let resp = client.get("http://localhost:8080/ami/author/search")
+                            .query(&[("platformAliasId", *msg.author.id.as_u64())])
+                            .send();
+                match resp.await {
+                    Ok(resp) => {
+                        if resp.status() == StatusCode::OK {
+                            let author = resp.json::<domain::ami::Author>().await.unwrap();
+                            println!("Search Found Author: {:?}", author);
+                            println!("Query URL: {:?}", "http://localhost:8080/ami/author/".to_owned() + &author.Id[..]);
+                            let delete_resp = client.delete("http://localhost:8080/ami/author/".to_owned() + &author.Id[..]).send();
+                            match delete_resp.await {
+                                Ok(delete_resp) => {
+                                    if delete_resp.status() == StatusCode::OK {
+                                        println!("Author Deleted: {:?}", msg.author.name);
+                                        if let Err(why) = msg.channel_id.say(&ctx.http, format!("Author Deleted: {:?}", msg.author.name)).await {
+                                            println!("Error sending message: {:?}", why);
+                                        }
+                                    } else {
+                                        if let Err(why) = msg.channel_id.say(&ctx.http, "Error retrieving or parsing response.").await {
+                                            println!("Error sending message: {:?}", why);
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    if let Err(why) = msg.channel_id.say(&ctx.http, "Error Deleting :: service might be off").await {
+                                        println!("Error sending message: {:?}", why);
+                                    }
+                                }
+                            }
+                        } else {
+                            if let Err(why) = msg.channel_id.say(&ctx.http, "Error retrieving or parsing response.").await {
+                                println!("Error sending message: {:?}", why);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        if let Err(why) = msg.channel_id.say(&ctx.http, "Error Searching :: service might be off").await {
                             println!("Error sending message: {:?}", why);
                         }
                     }
