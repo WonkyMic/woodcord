@@ -10,6 +10,7 @@ const ADD_AUTHOR_COMMAND: &str = "!addauthor";
 const DELETE_AUTHOR_COMMAND: &str = "!delauthor";
 const LIST_AUTHORS_COMMAND: &str = "!listauthors";
 const AMI_HEALTH_COMMAND: &str = "!amihealth";
+const CLIPBOARD_COMMAND: &str = "!clipboard";
 const TEST_COMMAND: &str = "!test";
 
 const SELF: &str = "Woodcord";
@@ -31,6 +32,55 @@ impl EventHandler for WoodcordHandler {
             return
         }
         match &msg.content[..] {
+            CLIPBOARD_COMMAND => {
+                let client = reqwest::Client::builder().build().unwrap();
+                let resp = client.get("http://localhost:8080/ami/author/search")
+                            .query(&[("platformAliasId", *msg.author.id.as_u64())])
+                            .send();
+                match resp.await {
+                    Ok(resp) => {
+                        if resp.status() == StatusCode::OK {
+                            let author = resp.json::<domain::ami::Author>().await.unwrap();
+                            println!("Search Found Author: {:?}", author);
+                            println!("Query URL: {:?}", "http://localhost:8080/ami/author/".to_owned() + &author.Id[..] + "/messages");
+                            let resp = client.get("http://localhost:8080/ami/author/".to_owned() + &author.Id[..] + "/messages").send();
+                            match resp.await {
+                                Ok(resp) => {
+                                    if resp.status() == StatusCode::OK {
+                                        let message_list = resp.json::<Vec<domain::ami::MessageResponse>>().await.unwrap();
+                                        let clipboard: String = message_list.iter().map(|m| "\n".to_owned() + &m.Content).collect();
+                                        println!("Author Message List: {:?}", &message_list);
+                                        let response = MessageBuilder::new()
+                                                        .push("Clipboard: ")
+                                                        .push_bold_safe(&msg.author.name)
+                                                        .push("\n")
+                                                        .push(clipboard)
+                                                        // .push_bold_safe(message_list)
+                                                        .build();
+                                        if let Err(why) = msg.channel_id.say(&ctx.http, &response).await {
+                                            println!("Error getting message list: {:?}", why);
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    if let Err(why) = msg.channel_id.say(&ctx.http, "Error :: service might be off").await {
+                                        println!("Error getting message list: {:?}", why);
+                                    }
+                                }
+                            }
+                        } else {
+                            if let Err(why) = msg.channel_id.say(&ctx.http, "Error retrieving or parsing response.").await {
+                                println!("Error sending message: {:?}", why);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        if let Err(why) = msg.channel_id.say(&ctx.http, "Error Searching :: service might be off").await {
+                            println!("Error sending message: {:?}", why);
+                        }
+                    }
+                }                
+            },
             ADD_AUTHOR_COMMAND => {
                 let author_request = domain::ami::AuthorRequest {
                     Alias: msg.author.name,
@@ -189,7 +239,6 @@ impl EventHandler for WoodcordHandler {
                     Ok(channel) => channel,
                     Err(why) => {
                         println!("Error getting channel: {:?}", why);
-    
                         return;
                     },
                 };
@@ -198,18 +247,57 @@ impl EventHandler for WoodcordHandler {
                 println!("Author: {:?}", &msg.author.name);
 
                 if TEST_CHANNEL == channel.to_string() {
-                    let response = MessageBuilder::new()
-                    .push("Repeat: ")
-                    .push(&msg.content)
-                    .build();
-                if let Err(why) = msg.channel_id.say(&ctx.http, &response).await {
-                    println!("Error sending message: {:?}", why);
-                }
-
+                    let client = reqwest::Client::builder().build().unwrap();
+                    let resp = client.get("http://localhost:8080/ami/author/search")
+                            .query(&[("platformAliasId", *msg.author.id.as_u64())])
+                            .send();
+                    match resp.await {
+                        Ok(resp) => {
+                            if resp.status() == StatusCode::OK {
+                                let author = resp.json::<domain::ami::Author>().await.unwrap();
+                                let message_request = domain::ami::MessageRequest {
+                                    AuthorId: author.Id,
+                                    Content: (*msg.content).to_string(),
+                                    Platform: "Discord".to_string()
+                                };
+                                let msg_resp = client.post("http://localhost:8080/ami/message/")
+                                                .json(&message_request)
+                                                .send();
+                                
+                                match msg_resp.await {
+                                    Ok(msg_resp) => {
+                                        if msg_resp.status() == StatusCode::CREATED {
+                                            if let Err(why) = msg.react(&ctx.http, '☑').await {
+                                                println!("Error saving message: {:?}", why);
+                                            }
+                                        } else {
+                                            if let Err(why) = msg.react(&ctx.http, '❌').await {
+                                                println!("Error saving message: {:?}", why);
+                                            }
+                                        }   
+                                    },
+                                    Err(_) => {
+                                        if let Err(why) = msg.channel_id.say(&ctx.http, "We not good :: service might be off").await {
+                                            println!("Error saving message: {:?}", why);
+                                        }
+                                    }
+                                }
+                                if let Err(why) = msg.react(&ctx.http, '☑').await {
+                                    println!("Error sending message: {:?}", why);
+                                }
+                            } else {
+                                println!("Author not in AMI ignoring message from {:?}", &msg.author.name)
+                            }
+                        }
+                        Err(_) => {
+                            if let Err(why) = msg.channel_id.say(&ctx.http, "Error Searching :: service might be off").await {
+                                println!("Error sending message: {:?}", why);
+                            }
+                        }
+                    }                
                 } else {
                     println!("'Ignoring' message from {:?}", &msg.author.name)
                 }
-                
             }
         }
     }
